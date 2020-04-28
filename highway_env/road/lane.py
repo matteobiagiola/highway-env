@@ -142,6 +142,12 @@ class StraightLane(AbstractLane):
     def width_at(self, s):
         return self.width
 
+    def get_start(self):
+        return self.start
+
+    def get_end(self):
+        return self.end
+
     def local_coordinates(self, position):
         delta = position - self.start
         longitudinal = np.dot(delta, self.direction)
