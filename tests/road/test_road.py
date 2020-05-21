@@ -2,7 +2,7 @@ import pytest
 
 from highway_env.road.lane import StraightLane
 from highway_env.road.road import Road, RoadNetwork
-from highway_env.vehicle.control import ControlledVehicle
+from highway_env.vehicle.controller import ControlledVehicle
 
 
 def test_network():
@@ -17,7 +17,7 @@ def test_network():
 
     # Road
     road = Road(network=net)
-    v = ControlledVehicle(road, [5, 0], heading=0, target_velocity=2)
+    v = ControlledVehicle(road, [5, 0], heading=0, target_speed=2)
     road.vehicles.append(v)
     assert v.lane_index == (0, 1, 0)
 

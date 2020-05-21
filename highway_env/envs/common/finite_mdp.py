@@ -1,19 +1,24 @@
 import importlib
 from functools import partial
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from highway_env import utils
 
+if TYPE_CHECKING:
+    from highway_env.envs import AbstractEnv
 
-def finite_mdp(env,
-               time_quantization=1.,
-               horizon=10.):
+
+def finite_mdp(env: 'AbstractEnv',
+               time_quantization: float = 1.,
+               horizon: float = 10.) -> object:
     """
         Time-To-Collision (TTC) representation of the state.
 
         The state reward is defined from a occupancy grid over different TTCs and lanes. The grid cells encode the
         probability that the ego-vehicle will collide with another vehicle if it is located on a given lane in a given
-        duration, under the hypothesis that every vehicles observed will maintain a constant velocity (including the
+        duration, under the hypothesis that every vehicles observed will maintain a constant speed (including the
         ego-vehicle) and not change lane (excluding the ego-vehicle).
 
         For instance, in a three-lane road with a vehicle on the left lane with collision predicted in 5s the grid will
@@ -23,8 +28,8 @@ def finite_mdp(env,
          0, 0, 0, 0, 0, 0, 0]
         The TTC-state is a coordinate (lane, time) within this grid.
 
-        If the ego-vehicle has the ability to change its velocity, an additional layer is added to the occupancy grid
-        to iterate over the different velocity choices available.
+        If the ego-vehicle has the ability to change its speed, an additional layer is added to the occupancy grid
+        to iterate over the different speed choices available.
 
         Finally, this state is flattened for compatibility with the FiniteMDPEnv environment.
 
@@ -47,11 +52,11 @@ def finite_mdp(env,
     # Compute reward function
     v, l, t = grid.shape
     lanes = np.arange(l)/max(l - 1, 1)
-    velocities = np.arange(v)/max(v - 1, 1)
+    speeds = np.arange(v)/max(v - 1, 1)
     state_reward = \
         + env.COLLISION_REWARD * grid \
         + env.RIGHT_LANE_REWARD * np.tile(lanes[np.newaxis, :, np.newaxis], (v, 1, t)) \
-        + env.HIGH_VELOCITY_REWARD * np.tile(velocities[:, np.newaxis, np.newaxis], (1, l, t))
+        + env.HIGH_SPEED_REWARD * np.tile(speeds[:, np.newaxis, np.newaxis], (1, l, t))
     state_reward = np.ravel(state_reward)
     action_reward = [env.LANE_CHANGE_REWARD, 0, env.LANE_CHANGE_REWARD, 0, 0]
     reward = np.fromfunction(np.vectorize(lambda s, a: state_reward[s] + action_reward[a]),
@@ -72,24 +77,25 @@ def finite_mdp(env,
         raise ModuleNotFoundError("The finite_mdp module is required for conversion. {}".format(e))
 
 
-def compute_ttc_grid(env, time_quantization, horizon, considered_lanes="all"):
+def compute_ttc_grid(env: 'AbstractEnv', time_quantization: float, horizon: float, considered_lanes: str = "all") \
+        -> np.ndarray:
     """
-        For each ego-velocity and lane, compute the predicted time-to-collision to each vehicle within the lane and
+        For each ego-speed and lane, compute the predicted time-to-collision to each vehicle within the lane and
         store the results in an occupancy grid.
     """
     road_lanes = env.road.network.all_side_lanes(env.vehicle.lane_index)
     grid = np.zeros((env.vehicle.SPEED_COUNT, len(road_lanes), int(horizon / time_quantization)))
-    for velocity_index in range(grid.shape[0]):
-        ego_velocity = env.vehicle.index_to_speed(velocity_index)
+    for speed_index in range(grid.shape[0]):
+        ego_speed = env.vehicle.index_to_speed(speed_index)
         for other in env.road.vehicles:
-            if (other is env.vehicle) or (ego_velocity == other.velocity):
+            if (other is env.vehicle) or (ego_speed == other.speed):
                 continue
             margin = other.LENGTH / 2 + env.vehicle.LENGTH / 2
             collision_points = [(0, 1), (-margin, 0.5), (margin, 0.5)]
             for m, cost in collision_points:
                 distance = env.vehicle.lane_distance_to(other) + m
-                other_projected_velocity = other.velocity * np.dot(other.direction, env.vehicle.direction)
-                time_to_collision = distance / utils.not_zero(ego_velocity - other_projected_velocity)
+                other_projected_speed = other.speed * np.dot(other.direction, env.vehicle.direction)
+                time_to_collision = distance / utils.not_zero(ego_speed - other_projected_speed)
                 if time_to_collision < 0:
                     continue
                 if env.road.network.is_connected_road(env.vehicle.lane_index, other.lane_index,
@@ -105,19 +111,19 @@ def compute_ttc_grid(env, time_quantization, horizon, considered_lanes="all"):
                                  int(np.ceil(time_to_collision / time_quantization))]:
                         if 0 <= time < grid.shape[2]:
                             # TODO: check lane overflow (e.g. vehicle with higher lane id than current road capacity)
-                            grid[velocity_index, lane, time] = np.maximum(grid[velocity_index, lane, time], cost)
+                            grid[speed_index, lane, time] = np.maximum(grid[speed_index, lane, time], cost)
     return grid
 
 
-def transition_model(h, i, j, a, grid):
+def transition_model(h: int, i: int, j: int, a: int, grid: np.ndarray) -> np.ndarray:
     """
         Deterministic transition from a position in the grid to the next.
 
-    :param h: velocity index
+    :param h: speed index
     :param i: lane index
     :param j: time index
     :param a: action index
-    :param grid: ttc grid specifying the limits of velocities, lanes, time and actions
+    :param grid: ttc grid specifying the limits of speeds, lanes, time and actions
     """
     # Idle action (1) as default transition
     next_state = clip_position(h, i, j + 1, grid)
@@ -132,11 +138,11 @@ def transition_model(h, i, j, a, grid):
     return next_state
 
 
-def clip_position(h, i, j, grid):
+def clip_position(h: int, i: int, j: int, grid: np.ndarray) -> np.ndarray:
     """
         Clip a position in the TTC grid, so that it stays within bounds.
 
-    :param h: velocity index
+    :param h: speed index
     :param i: lane index
     :param j: time index
     :param grid: the ttc grid

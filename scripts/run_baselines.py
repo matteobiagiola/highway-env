@@ -4,9 +4,9 @@ import baselines.run as run
 import highway_env
 
 DEFAULT_ARGUMENTS = [
-    "--env=parking-ActionRepeat-v0",
+    "--env=parking-v0",
     "--alg=her",
-    "--num_timesteps=0",
+    "--num_timesteps=1e4",
     "--network=default",
     "--num_env=0",
     "--save_path=~/models/latest",

@@ -1,3 +1,5 @@
+from typing import Dict, Tuple
+
 from gym.envs.registration import register
 import numpy as np
 
@@ -6,15 +8,15 @@ from highway_env.envs.common.abstract import AbstractEnv
 from highway_env.road.lane import LineType, StraightLane, CircularLane, SineLane, AbstractLane
 from highway_env.road.regulation import RegulatedRoad
 from highway_env.road.road import RoadNetwork
-from highway_env.vehicle.control import MDPVehicle
+from highway_env.vehicle.controller import MDPVehicle
 
 
 class IntersectionEnv(AbstractEnv):
-    COLLISION_REWARD = -5
-    HIGH_VELOCITY_REWARD = 1
-    ARRIVED_REWARD = 1
+    COLLISION_REWARD: float = -5
+    HIGH_SPEED_REWARD: float = 1
+    ARRIVED_REWARD: float = 1
 
-    ACTIONS = {
+    ACTIONS: Dict[int, str] = {
         0: 'SLOWER',
         1: 'IDLE',
         2: 'FASTER'
@@ -22,7 +24,7 @@ class IntersectionEnv(AbstractEnv):
     ACTIONS_INDEXES = {v: k for k, v in ACTIONS.items()}
 
     @classmethod
-    def default_config(cls):
+    def default_config(cls) -> dict:
         config = super().default_config()
         config.update({
             "observation": {
@@ -41,6 +43,8 @@ class IntersectionEnv(AbstractEnv):
             },
             "duration": 13,  # [s]
             "destination": "o1",
+            "initial_vehicle_count": 10,
+            "spawn_probability": 0.6,
             "screen_width": 600,
             "screen_height": 600,
             "centering_position": [0.5, 0.6],
@@ -50,36 +54,36 @@ class IntersectionEnv(AbstractEnv):
         })
         return config
 
-    def _reward(self, action):
+    def _reward(self, action: int) -> float:
         reward = self.config["collision_reward"] * self.vehicle.crashed \
-                 + self.HIGH_VELOCITY_REWARD * (self.vehicle.velocity_index == self.vehicle.SPEED_COUNT - 1)
+                 + self.HIGH_SPEED_REWARD * (self.vehicle.speed_index == self.vehicle.SPEED_COUNT - 1)
         reward = self.ARRIVED_REWARD if self.has_arrived else reward
         if self.config["normalize_reward"]:
             reward = utils.remap(reward, [self.config["collision_reward"], self.ARRIVED_REWARD], [0, 1])
         return reward
 
-    def _is_terminal(self):
+    def _is_terminal(self) -> bool:
         """
             The episode is over when a collision occurs or when the access ramp has been passed.
         """
         return self.vehicle.crashed \
-               or self.steps >= self.config["duration"] * self.config["policy_frequency"] \
-               or self.has_arrived
+            or self.steps >= self.config["duration"] * self.config["policy_frequency"] \
+            or self.has_arrived
 
-    def reset(self):
+    def reset(self) -> np.ndarray:
         self._make_road()
-        self._make_vehicles()
+        self._make_vehicles(self.config["initial_vehicle_count"])
         self.steps = 0
         return super().reset()
 
-    def step(self, action):
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, dict]:
         results = super().step(action)
         self.steps += 1
         self._clear_vehicles()
-        self._spawn_vehicle()
+        self._spawn_vehicle(spawn_probability=self.config["spawn_probability"])
         return results
 
-    def _make_road(self):
+    def _make_road(self) -> None:
         """
             Make an 4-way intersection.
 
@@ -134,14 +138,14 @@ class IntersectionEnv(AbstractEnv):
         road = RegulatedRoad(network=net, np_random=self.np_random, record_history=self.config["show_trajectories"])
         self.road = road
 
-    def _make_vehicles(self, n_vehicles=10):
+    def _make_vehicles(self, n_vehicles: int = 10) -> None:
         """
             Populate a road with several vehicles on the highway and on the merging lane, as well as an ego-vehicle.
         :return: the ego-vehicle
         """
         # Configure vehicles
         vehicle_type = utils.class_from_path(self.config["other_vehicles_type"])
-        vehicle_type.DISTANCE_WANTED = 2  # Low jam distance
+        vehicle_type.DISTANCE_WANTED = 7  # Low jam distance
         vehicle_type.COMFORT_ACC_MAX = 6
         vehicle_type.COMFORT_ACC_MIN = -3
 
@@ -150,10 +154,10 @@ class IntersectionEnv(AbstractEnv):
         for t in range(n_vehicles - 1):
             self._spawn_vehicle(np.linspace(0, 80, n_vehicles)[t])
         for _ in range(simulation_steps):
-            [(self.road.act(), self.road.step(1 / self.SIMULATION_FREQUENCY)) for _ in range(self.SIMULATION_FREQUENCY)]
+            [(self.road.act(), self.road.step(1 / self.config["simulation_frequency"])) for _ in range(self.config["simulation_frequency"])]
 
         # Challenger vehicle
-        self._spawn_vehicle(60, spawn_probability=1, go_straight=True, position_deviation=0.1, velocity_deviation=0)
+        self._spawn_vehicle(60, spawn_probability=1, go_straight=True, position_deviation=0.1, speed_deviation=0)
 
         # Ego-vehicle
         MDPVehicle.SPEED_MIN = 0
@@ -164,7 +168,7 @@ class IntersectionEnv(AbstractEnv):
         destination = self.config["destination"] or "o" + str(self.np_random.randint(1, 4))
         ego_vehicle = MDPVehicle(self.road,
                                  ego_lane.position(60, 0),
-                                 velocity=ego_lane.speed_limit,
+                                 speed=ego_lane.speed_limit,
                                  heading=ego_lane.heading_at(50)) \
             .plan_route_to(destination)
         self.road.vehicles.append(ego_vehicle)
@@ -174,11 +178,11 @@ class IntersectionEnv(AbstractEnv):
                 self.road.vehicles.remove(v)
 
     def _spawn_vehicle(self,
-                       longitudinal=0,
-                       position_deviation=1.,
-                       velocity_deviation=1.,
-                       spawn_probability=0.6,
-                       go_straight=False):
+                       longitudinal: float = 0,
+                       position_deviation: float = 1.,
+                       speed_deviation: float = 1.,
+                       spawn_probability: float = 0.6,
+                       go_straight: bool = False) -> None:
         if self.np_random.rand() > spawn_probability:
             return
 
@@ -187,7 +191,7 @@ class IntersectionEnv(AbstractEnv):
         vehicle_type = utils.class_from_path(self.config["other_vehicles_type"])
         vehicle = vehicle_type.make_on_lane(self.road, ("o" + str(route[0]), "ir" + str(route[0]), 0),
                                             longitudinal=longitudinal + 5 + self.np_random.randn() * position_deviation,
-                                            velocity=8 + self.np_random.randn() * velocity_deviation)
+                                            speed=8 + self.np_random.randn() * speed_deviation)
         for v in self.road.vehicles:
             if np.linalg.norm(v.position - vehicle.position) < 15:
                 return
@@ -196,7 +200,7 @@ class IntersectionEnv(AbstractEnv):
         self.road.vehicles.append(vehicle)
         return vehicle
 
-    def _clear_vehicles(self):
+    def _clear_vehicles(self) -> None:
         is_leaving = lambda vehicle: "il" in vehicle.lane_index[0] and "o" in vehicle.lane_index[1] \
                                      and vehicle.lane.local_coordinates(vehicle.position)[0] \
                                      >= vehicle.lane.length - 4 * vehicle.LENGTH
@@ -204,15 +208,15 @@ class IntersectionEnv(AbstractEnv):
                               vehicle is self.vehicle or not (is_leaving(vehicle) or vehicle.route is None)]
 
     @property
-    def has_arrived(self):
+    def has_arrived(self) -> bool:
         return "il" in self.vehicle.lane_index[0] \
                and "o" in self.vehicle.lane_index[1] \
                and self.vehicle.lane.local_coordinates(self.vehicle.position)[0] >= \
                self.vehicle.lane.length - 3 * self.vehicle.LENGTH
 
-    def _cost(self, action):
+    def _cost(self, action: int) -> float:
         """
-            The constraint signal is the occurence of collisions.
+            The constraint signal is the occurrence of collisions.
         """
         return float(self.vehicle.crashed)
 
